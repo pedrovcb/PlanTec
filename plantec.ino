@@ -1,55 +1,61 @@
-//PlanTec - Umidade + GSM + Irrigação
-// Responde SMS com [SIM] para ativar irrigação
+// PlanTec 2.1 - Umidade + GSM + Irrigação
+// Solo seco = valor alto / Solo úmido = valor baixo
+// Relé invertido: LOW = LIGA / HIGH = DESLIGA
+// Irrigação ativa por 5s após SMS "SIM"
 
 #include <Wire.h> 
 #include <LiquidCrystal_I2C.h>
 #include <SoftwareSerial.h>
 
-//---------------- LCD ----------------//
+//LCD
 LiquidCrystal_I2C lcd(0x27,20,4);
 
-//---------------- SENSOR -------------//
-int ldr = A0;
+//SENSOR
+int sensor = A0;
 int leitura;
+int umidadePercentual;
 
-//---------------- GSM ----------------//
-SoftwareSerial gsm(11, 10);  // RX=11 , TX=10
-String telefone = "+55XXXXXXXXXXX"; // <-- coloque seu número
+//GSM
+SoftwareSerial gsm(10, 11);
+String telefone = "+558294022654";
 
-//---------------- IRRIGAÇÃO ----------//
-int releIrrigacao = 8;          // Saída do relé
-bool smsEnviado = false;        // Controla envio único
-int limite_baixo = 600;         // Umidade baixa = alerta
-unsigned long tempoIrrigacao = 5000;  // 5 segundos
+//IRRIGAÇÃO
+int releIrrigacao = 8;
+
+bool smsEnviado = false;
+
+int limite_seco = 700;
+unsigned long tempoIrrigacao = 5000;
 unsigned long inicioIrrigacao = 0;
 bool irrigando = false;
 
-//=====================================//
 void setup(){
   Serial.begin(9600);
   gsm.begin(9600);
 
-  //LCD
-  lcd.init(); lcd.backlight();
-  lcd.setCursor(0,0); lcd.print("Indice Umidade");
-  lcd.setCursor(0,2); lcd.print("PlanTec - G15");
+  lcd.init(); 
+  lcd.backlight();
 
-  //Rele irrigação
+  lcd.setCursor(0,0); 
+  lcd.print("Indice Umidade");
+  lcd.setCursor(0,2); 
+  lcd.print("PlanTec - G15");
+
   pinMode(releIrrigacao, OUTPUT);
-  digitalWrite(releIrrigacao, LOW); // começa desligado
 
-  //Configura GSM
+  digitalWrite(releIrrigacao, HIGH); 
+
   delay(2000);
   gsm.println("AT");
   delay(1000);
-  gsm.println("AT+CMGF=1"); // Modo texto
+  gsm.println("AT+CMGF=1");
   delay(1000);
-  gsm.println("AT+CNMI=1,2,0,0,0"); // Notifica SMS recebido automaticamente
+  gsm.println("AT+CNMI=1,2,0,0,0");
   delay(1000);
 }
 
-//=====================================//
-// ENVIO DE SMS
+
+
 void sendSMS(String msg){
   gsm.println("AT+CMGF=1");
   delay(500);
@@ -63,59 +69,80 @@ void sendSMS(String msg){
   delay(5000);
 }
 
-//=====================================//
-// LEITURA DE SMS RECEBIDO
+
+
 void receberSMS(){
   if(gsm.available()){
     String sms = gsm.readString();
+    sms.toUpperCase();
 
-    sms.toUpperCase(); // facilita detecção do SIM
+    if(sms.indexOf("SIM") >= 0 && !irrigando){
+      
+      digitalWrite(releIrrigacao, LOW);
 
-    if(sms.indexOf("SIM") >= 0 && !irrigando){   // dono respondeu SIM e irrigação está desligada
-		 digitalWrite(releIrrigacao, HIGH); // Ativa irrigação
-		 irrigando = true;
-		 inicioIrrigacao = millis();        // Marca início do tempo
-		 sendSMS("Irrigacao ativada! Funcionara por 5 segundos.");
-		 Serial.println("IRRIGACAO LIGADA por SMS!");
-		 lcd.setCursor(0,3); lcd.print("Irrigando...       ");
-		}
+      irrigando = true;
+      inicioIrrigacao = millis();
+
+      sendSMS("Irrigacao ativada! Funcionando por 5 segundos.");
+      Serial.println("IRRIGACAO LIGADA por SMS!");
+
+      lcd.setCursor(0,3); 
+      lcd.print("Irrigando...       ");
+    }
   }
 }
 
-//=====================================//
+
 
 void loop(){
-  leitura = analogRead(ldr);
-  Serial.println(leitura);
+  leitura = analogRead(sensor);
 
-  lcd.setCursor(5,1); lcd.print("    ");
-  lcd.setCursor(5,1); lcd.print(leitura);
+  umidadePercentual = map(leitura, 0, 1200, 100, 0);
 
-  // ----- UMIDADE BAIXA - ENVIA 1 SMS -----
-  if(leitura < limite_baixo && !smsEnviado){
-    sendSMS("⚠ UMIDADE BAIXA! Valor: " + String(leitura) + 
-            "\nResponder: SIM para ativar irrigacao.");
+  Serial.print("Bruto: ");
+  Serial.print(leitura);
+  Serial.print(" | Umidade: ");
+  Serial.print(umidadePercentual);
+  Serial.println("%");
+
+  lcd.setCursor(5,1);
+  lcd.print("       ");
+  lcd.setCursor(5,1);
+  lcd.print(umidadePercentual);
+  lcd.print("%");
+
+if (umidadePercentual <= 30 && !smsEnviado) {
+    sendSMS("ALERTA: SOLO SECO!\nUmidade: " + String(umidadePercentual) +
+            "%\nResponder: SIM para ativar irrigacao.");
     smsEnviado = true;
-  }
+    Serial.print("Enviando Mensagem de Alerta");
+}
 
-  // ----- RESET QUANDO VOLTA AO NORMAL -----
-  if(leitura >= limite_baixo && smsEnviado){
+if (umidadePercentual > 30 && smsEnviado) {
     smsEnviado = false;
-    sendSMS("Umidade normalizada novamente.");
-    digitalWrite(releIrrigacao, LOW);
-    lcd.setCursor(0,3); lcd.print("Sistema estavel.   ");
-  }
+    sendSMS("Solo umido novamente! (" + String(umidadePercentual) + "%)");
+    Serial.print("Enviando mensagem de regularização");
 
-  receberSMS(); // monitora mensagens recebidas
+    digitalWrite(releIrrigacao, HIGH);
+
+    lcd.setCursor(0,3); 
+    lcd.print("Sistema estavel.   ");
+}
+
+  receberSMS();
 
   delay(800);
-  
-  // ===== CONTROLE DO TEMPO DE IRRIGAÇÃO (5s) =====
-	if(irrigando && millis() - inicioIrrigacao >= tempoIrrigacao){
-	 irrigando = false;
-	 digitalWrite(releIrrigacao, LOW);   // Desliga irrigação
-	 sendSMS("Irrigacao finalizada automaticamente (5s).");
-	 Serial.println("IRRIGACAO DESLIGADA - TEMPO FINALIZADO");
-	 lcd.setCursor(0,3); lcd.print("Irrigacao concluida");
-	}
+
+  if(irrigando && millis() - inicioIrrigacao >= tempoIrrigacao){
+
+    irrigando = false;
+
+    digitalWrite(releIrrigacao, HIGH);
+
+    sendSMS("Irrigacao finalizada automaticamente (5s).");
+    Serial.println("IRRIGACAO DESLIGADA - TEMPO FINALIZADO");
+
+    lcd.setCursor(0,3); 
+    lcd.print("Irrigacao concluida");
+  }
 }
